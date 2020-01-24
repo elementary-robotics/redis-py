@@ -2399,7 +2399,7 @@ class TestRedisCommands(object):
         # xread starting at the last message returns an empty list
         assert r.xread(streams={stream: m2}) == []
 
-        # memoryviews
+        # memoryviews, short strings (these will get converted to bytes)
         m3 = r.xadd(stream, {'boom': memoryview(b'bop')})
         expected = [
             [
@@ -2411,6 +2411,19 @@ class TestRedisCommands(object):
         ]
 
         assert r.xread(streams={stream: m2}) == expected
+
+        # memoryviews, long strings (these will not get converted to bytes)
+        m4 = r.xadd(stream, {'poom': memoryview(b''.join([b'bop']*10000))})
+        expected = [
+            [
+                stream.encode(),
+                [
+                    get_stream_message(r, stream, m4),
+                ]
+            ]
+        ]
+
+        assert r.xread(streams={stream: m3}) == expected
 
     @skip_if_server_version_lt('5.0.0')
     def test_xreadgroup(self, r):
