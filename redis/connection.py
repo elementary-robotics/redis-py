@@ -761,8 +761,8 @@ class Connection(object):
 
         buffer_cutoff = self._buffer_cutoff
         for arg in imap(self.encoder.encode, args):
-            # to avoid large string mallocs, chunk the command into the
-            # output list if we're sending large values
+            # join small arguments before sending, keep large arguments separate
+            # to avoid memory copies
             arg_length = len(arg)
             if len(buff) > buffer_cutoff or arg_length > buffer_cutoff:
                 buff = SYM_EMPTY.join(
@@ -780,26 +780,8 @@ class Connection(object):
     def pack_commands(self, commands):
         "Pack multiple commands into the Redis protocol"
         output = []
-        pieces = []
-        buffer_length = 0
-        buffer_cutoff = self._buffer_cutoff
-
         for cmd in commands:
-            for chunk in self.pack_command(*cmd):
-                chunklen = len(chunk)
-                if buffer_length > buffer_cutoff or chunklen > buffer_cutoff:
-                    output.append(SYM_EMPTY.join(pieces))
-                    buffer_length = 0
-                    pieces = []
-
-                if chunklen > self._buffer_cutoff:
-                    output.append(chunk)
-                else:
-                    pieces.append(chunk)
-                    buffer_length += chunklen
-
-        if pieces:
-            output.append(SYM_EMPTY.join(pieces))
+            output.extend(self.pack_command(*cmd))
         return output
 
 
