@@ -92,7 +92,7 @@ SENTINEL = object()
 
 
 class Encoder(object):
-    "Encode strings to bytes and decode bytes to strings"
+    "Encode strings to bytes-like and decode bytes-like to strings"
 
     def __init__(self, encoding, encoding_errors, decode_responses):
         self.encoding = encoding
@@ -100,8 +100,8 @@ class Encoder(object):
         self.decode_responses = decode_responses
 
     def encode(self, value):
-        "Return a bytestring representation of the value"
-        if isinstance(value, bytes):
+        "Return a bytestring or bytes-like representation of the value"
+        if isinstance(value, bytes) or isinstance(value, memoryview):
             return value
         elif isinstance(value, bool):
             # special case bool since it is a subclass of int
@@ -122,7 +122,7 @@ class Encoder(object):
         return value
 
     def decode(self, value, force=False):
-        "Return a unicode string from the byte representation"
+        "Return a unicode string from the bytes-like representation"
         if (self.decode_responses or force) and isinstance(value, bytes):
             value = value.decode(self.encoding, self.encoding_errors)
         return value
@@ -738,6 +738,12 @@ class Connection(object):
             raise response
         return response
 
+    def _maybe_to_bytes(self, arg):
+        if isinstance(arg, memoryview):
+            return arg.tobytes()
+        else:
+            return arg
+
     def pack_command(self, *args):
         "Pack a series of arguments into the Redis protocol"
         output = []
@@ -755,8 +761,8 @@ class Connection(object):
 
         buffer_cutoff = self._buffer_cutoff
         for arg in imap(self.encoder.encode, args):
-            # to avoid large string mallocs, chunk the command into the
-            # output list if we're sending large values
+            # join small arguments before sending, keep large arguments separate
+            # to avoid memory copies
             arg_length = len(arg)
             if len(buff) > buffer_cutoff or arg_length > buffer_cutoff:
                 buff = SYM_EMPTY.join(
@@ -767,33 +773,15 @@ class Connection(object):
             else:
                 buff = SYM_EMPTY.join(
                     (buff, SYM_DOLLAR, str(arg_length).encode(),
-                     SYM_CRLF, arg, SYM_CRLF))
+                     SYM_CRLF, self._maybe_to_bytes(arg), SYM_CRLF))
         output.append(buff)
         return output
 
     def pack_commands(self, commands):
         "Pack multiple commands into the Redis protocol"
         output = []
-        pieces = []
-        buffer_length = 0
-        buffer_cutoff = self._buffer_cutoff
-
         for cmd in commands:
-            for chunk in self.pack_command(*cmd):
-                chunklen = len(chunk)
-                if buffer_length > buffer_cutoff or chunklen > buffer_cutoff:
-                    output.append(SYM_EMPTY.join(pieces))
-                    buffer_length = 0
-                    pieces = []
-
-                if chunklen > self._buffer_cutoff:
-                    output.append(chunk)
-                else:
-                    pieces.append(chunk)
-                    buffer_length += chunklen
-
-        if pieces:
-            output.append(SYM_EMPTY.join(pieces))
+            output.extend(self.pack_command(*cmd))
         return output
 
 
